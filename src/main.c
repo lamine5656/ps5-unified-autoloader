@@ -215,6 +215,21 @@ static void run_autoload_sequence(const char *config_path) {
             }
         } else {
             /* ELF/BIN payload — resolve relative to config directory */
+            /* Skip the embedded payload: hyperhen.elf is auto-launched from memory
+               earlier (Step 4b). Launching it twice crashes ("hypercore stopped"). */
+            char base_name[256];
+            snprintf(base_name, sizeof(base_name), "%s", line);
+            char *base_slash = strrchr(base_name, '/');
+            if (base_slash) {
+                memmove(base_name, base_slash + 1, strlen(base_slash + 1) + 1);
+            }
+            if (strcasecmp(base_name, "hyperhen.elf") == 0) {
+                printf("[autoloader] Skipping %s: already auto-launched (embedded)\n", line);
+                fflush(stdout);
+                autoloader_notify("hyperhen.elf skipped (already auto-launched)");
+                continue;
+            }
+
             char full_path[1024];
             if (line[0] == '/') {
                 /* Absolute path — use as-is */
