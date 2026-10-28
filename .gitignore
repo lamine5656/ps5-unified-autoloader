@@ -1,6 +1,6 @@
 # Build outputs
 *.elf
-!hyperhen.elf        # intentionally committed: embedded at build time
+!hyperhen.elf
 *.o
 *.c.bak
 
