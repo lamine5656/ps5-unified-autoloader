@@ -1,6 +1,5 @@
 # Build outputs
 *.elf
-!hyperhen.elf
 *.o
 *.c.bak
 

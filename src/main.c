@@ -36,15 +36,12 @@
 #include "pldmgr_elf.c"
 
 /*
- * hyperhen.elf is embedded the same way (see Makefile):
- *   xxd -i hyperhen.elf > hyperhen_elf.c
- * giving:
- *   unsigned char hyperhen_elf[];
- *   unsigned int  hyperhen_elf_len;
- * It is sent to elfldr automatically right after elfldr is ready,
- * BEFORE autoload.txt processing, so HEN is always available.
+ * NOTE (l92): hyperhen.elf is NO LONGER embedded. A 12+ MB autoloader ELF has to
+ * be read fully into memory by the browser-side JS (autoload.js) which crashes
+ * the exploit context (CE-108255-1). Instead the autoloader launches
+ * hyperhen.elf FROM FILE (next to autoload.txt, or /data/ps5_autoloader/)
+ * right after elfldr is ready, before the rest of the autoload sequence.
  */
-#include "hyperhen_elf.c"
 
 /* -----------------------------------------------------------------------
  * find_autoload_config
@@ -304,23 +301,69 @@ int main(void) {
         return -1;
     }
 
-    /* Step 4b: launch the embedded HyperHEN immediately after the jailbreak,
-       BEFORE autoload.txt so that HEN-based payloads always have HEN ready */
-    printf("[autoloader] Launching embedded HyperHEN (%u bytes)...\n", hyperhen_elf_len);
-    fflush(stdout);
-    autoloader_notify("Launching HyperHEN...");
-    if (launch_elf_from_memory(hyperhen_elf, hyperhen_elf_len) == 0) {
-        usleep(1500000); /* 1.5 s - give the kernel payload time to settle */
-        autoloader_notify("HyperHEN loaded");
-    } else {
-        printf("[autoloader] WARNING: HyperHEN launch failed, continuing\n");
-        fflush(stdout);
-        autoloader_notify("HyperHEN launch failed (continuing)");
-    }
-
+    /* Step 4b (helper): launch HyperHEN from `dir` if hyperhen.elf exists there.
+       Returns 1 when launched, 0 otherwise. */
     /* Step 5: locate autoload.txt */
     char config_path[512];
     int found = (find_autoload_config(config_path, sizeof(config_path)) == 0);
+
+    /* Detect/launch HyperHEN from file BEFORE running the autoload sequence.
+       It sits in the same dir as autoload.txt (or in the generic dirs below). */
+    char hen_path[1024];
+    int hen_launched = 0;
+    if (found) {
+        /* dir containing the found autoload.txt */
+        char config_dir[512];
+        strncpy(config_dir, config_path, sizeof(config_dir) - 1);
+        config_dir[sizeof(config_dir) - 1] = '\0';
+        char *last_slash = strrchr(config_dir, '/');
+        if (last_slash) {
+            *(last_slash + 1) = '\0';
+        } else {
+            config_dir[0] = '\0';
+        }
+        if (resolve_case_insensitive(config_dir, "hyperhen.elf", hen_path, sizeof(hen_path)) == 0) {
+            printf("[autoloader] Launching HyperHEN from file: %s\n", hen_path);
+            fflush(stdout);
+            autoloader_notify("Launching HyperHEN...");
+            if (launch_elf_from_file(hen_path) == 0) {
+                usleep(1500000); /* 1.5 s - give the kernel payload time to settle */
+                autoloader_notify("HyperHEN loaded");
+                hen_launched = 1;
+            } else {
+                printf("[autoloader] WARNING: HyperHEN file launch failed, continuing\n");
+                fflush(stdout);
+                autoloader_notify("HyperHEN launch failed (continuing)");
+            }
+        }
+    }
+    if (!hen_launched) {
+        /* Fallback: generic autoload dirs (works even without autoload.txt) */
+        const char *hen_search_bases[] = {
+            "/mnt/usb0/ps5_autoloader/",
+            "/mnt/usb1/ps5_autoloader/",
+            "/mnt/usb2/ps5_autoloader/",
+            "/mnt/usb3/ps5_autoloader/",
+            "/mnt/usb4/ps5_autoloader/",
+            "/mnt/usb5/ps5_autoloader/",
+            "/mnt/usb6/ps5_autoloader/",
+            "/mnt/usb7/ps5_autoloader/",
+            "/data/ps5_autoloader/"
+        };
+        for (size_t k = 0; k < sizeof(hen_search_bases) / sizeof(hen_search_bases[0]); k++) {
+            if (resolve_case_insensitive(hen_search_bases[k], "hyperhen.elf", hen_path, sizeof(hen_path)) == 0) {
+                printf("[autoloader] Launching HyperHEN from file: %s\n", hen_path);
+                fflush(stdout);
+                autoloader_notify("Launching HyperHEN...");
+                if (launch_elf_from_file(hen_path) == 0) {
+                    usleep(1500000);
+                    autoloader_notify("HyperHEN loaded");
+                    hen_launched = 1;
+                }
+                break;
+            }
+        }
+    }
 
     if (found) {
         /* Step 6a: run the autoload sequence from config */
