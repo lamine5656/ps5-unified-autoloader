@@ -164,6 +164,11 @@ static void run_autoload_sequence(const char *config_path) {
     int should_sync = 0;
     int bom_checked = 0;
 
+    /* Dedupe: basenames already launched this run (case-insensitive) so a
+       payload listed twice in autoload.txt is NOT launched twice */
+    char seen[32][128];
+    int seen_count = 0;
+
     while (fgets(line, sizeof(line), f)) {
         /* Strip the UTF-8 BOM editors like Windows Notepad add at file start;
            it silently breaks the stat() of the FIRST listed payload */
@@ -221,9 +226,23 @@ static void run_autoload_sequence(const char *config_path) {
                 memmove(base_name, base_slash + 1, strlen(base_slash + 1) + 1);
             }
             if (strcasecmp(base_name, "hyperhen.elf") == 0) {
-                printf("[autoloader] Skipping %s: already auto-launched (embedded)\n", line);
+                /* Already auto-launched from file before this sequence */
+                printf("[autoloader] Skipping %s: already auto-launched\n", line);
                 fflush(stdout);
-                autoloader_notify("hyperhen.elf skipped (already auto-launched)");
+                continue;
+            }
+
+            /* Skip duplicates of the same payload within this run */
+            int dup = 0;
+            for (int s = 0; s < seen_count; s++) {
+                if (strcasecmp(base_name, seen[s]) == 0) {
+                    printf("[autoloader] Skipping duplicate: %s (already launched this run)\n", line);
+                    fflush(stdout);
+                    dup = 1;
+                    break;
+                }
+            }
+            if (dup) {
                 continue;
             }
 
@@ -254,6 +273,10 @@ static void run_autoload_sequence(const char *config_path) {
                     errors++;
                 } else {
                     launched++;
+                    if (seen_count < 32) {
+                        snprintf(seen[seen_count], sizeof(seen[0]), "%s", base_name);
+                        seen_count++;
+                    }
                     /* Small delay to give elfldr time to receive and process */
                     usleep(500000); /* 500 ms */
                 }
@@ -270,7 +293,9 @@ static void run_autoload_sequence(const char *config_path) {
     fclose(f);
     printf("[autoloader] Autoload sequence complete. Launched %d payload(s).\n", launched);
     fflush(stdout);
-    autoloader_notify("Autoload complete (%d payload(s) launched)", launched);
+    if (launched > 0) {
+        autoloader_notify("Autoload complete (%d payload(s))", launched);
+    }
 
     if (should_sync && errors == 0) {
         try_sync_usb_to_data(config_path);
@@ -367,7 +392,8 @@ int main(void) {
 
     if (found) {
         /* Step 6a: run the autoload sequence from config */
-        autoloader_notify("Found autoload config:\n%s", config_path);
+        printf("[autoloader] Using autoload config: %s\n", config_path);
+        fflush(stdout);
         run_autoload_sequence(config_path);
     } else {
         /* Step 6b: no config — fall back to embedded pldmgr */
