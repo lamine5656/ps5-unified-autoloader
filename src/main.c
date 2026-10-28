@@ -47,8 +47,8 @@
  * find_autoload_config
  *
  * Searches for ps5_autoloader/autoload.txt in order:
- *   /mnt/usb0 .. /mnt/usb7  (highest priority)
- *   /data                   (fallback)
+ *   /data                   (internal storage — highest priority, per user preference)
+ *   /mnt/usb0 .. /mnt/usb7  (fallback)
  *
  * Writes the found path into out_buf (size out_size).
  * Returns 0 on success (found), -1 if not found.
@@ -56,7 +56,25 @@
 static int find_autoload_config(char *out_buf, size_t out_size) {
     struct stat st;
 
-    /* Check Title ID specific paths first if we have a title ID */
+    /* Internal storage ( /data ) has PRIORITY over USB (user wants offline
+       launches without needing the stick inserted) */
+    if (g_entry_point_id[0] != '\0') {
+        snprintf(out_buf, out_size, "%s/ps5_autoloader_%s/autoload.txt", DATA_BASE, g_entry_point_id);
+        if (stat(out_buf, &st) == 0) {
+            printf("[autoloader] Found config in /data: %s\n", out_buf);
+            fflush(stdout);
+            return 0;
+        }
+    }
+
+    snprintf(out_buf, out_size, "%s/%s", DATA_BASE, AUTOLOAD_CONFIG_SUBPATH);
+    if (stat(out_buf, &st) == 0) {
+        printf("[autoloader] Found config in /data: %s\n", out_buf);
+        fflush(stdout);
+        return 0;
+    }
+
+    /* Fallback: app-specific USB dirs */
     if (g_entry_point_id[0] != '\0') {
         for (int i = 0; i < USB_COUNT; i++) {
             snprintf(out_buf, out_size, "%s/ps5_autoloader_%s/autoload.txt", USB_BASES[i], g_entry_point_id);
@@ -66,16 +84,9 @@ static int find_autoload_config(char *out_buf, size_t out_size) {
                 return 0;
             }
         }
-
-        snprintf(out_buf, out_size, "%s/ps5_autoloader_%s/autoload.txt", DATA_BASE, g_entry_point_id);
-        if (stat(out_buf, &st) == 0) {
-            printf("[autoloader] Found config in /data: %s\n", out_buf);
-            fflush(stdout);
-            return 0;
-        }
     }
 
-    /* Check each USB base in priority order */
+    /* Fallback: generic USB dirs */
     for (int i = 0; i < USB_COUNT; i++) {
         snprintf(out_buf, out_size, "%s/%s", USB_BASES[i], AUTOLOAD_CONFIG_SUBPATH);
         if (stat(out_buf, &st) == 0) {
@@ -83,14 +94,6 @@ static int find_autoload_config(char *out_buf, size_t out_size) {
             fflush(stdout);
             return 0;
         }
-    }
-
-    /* Fallback: /data */
-    snprintf(out_buf, out_size, "%s/%s", DATA_BASE, AUTOLOAD_CONFIG_SUBPATH);
-    if (stat(out_buf, &st) == 0) {
-        printf("[autoloader] Found config in /data: %s\n", out_buf);
-        fflush(stdout);
-        return 0;
     }
 
     out_buf[0] = '\0';
@@ -365,6 +368,7 @@ int main(void) {
     if (!hen_launched) {
         /* Fallback: generic autoload dirs (works even without autoload.txt) */
         const char *hen_search_bases[] = {
+            "/data/ps5_autoloader/",
             "/mnt/usb0/ps5_autoloader/",
             "/mnt/usb1/ps5_autoloader/",
             "/mnt/usb2/ps5_autoloader/",
@@ -372,8 +376,7 @@ int main(void) {
             "/mnt/usb4/ps5_autoloader/",
             "/mnt/usb5/ps5_autoloader/",
             "/mnt/usb6/ps5_autoloader/",
-            "/mnt/usb7/ps5_autoloader/",
-            "/data/ps5_autoloader/"
+            "/mnt/usb7/ps5_autoloader/"
         };
         for (size_t k = 0; k < sizeof(hen_search_bases) / sizeof(hen_search_bases[0]); k++) {
             if (resolve_case_insensitive(hen_search_bases[k], "hyperhen.elf", hen_path, sizeof(hen_path)) == 0) {
