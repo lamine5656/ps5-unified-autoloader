@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -32,6 +34,17 @@
  *   unsigned int  pldmgr_elf_len = ...;
  */
 #include "pldmgr_elf.c"
+
+/*
+ * hyperhen.elf is embedded the same way (see Makefile):
+ *   xxd -i hyperhen.elf > hyperhen_elf.c
+ * giving:
+ *   unsigned char hyperhen_elf[];
+ *   unsigned int  hyperhen_elf_len;
+ * It is sent to elfldr automatically right after elfldr is ready,
+ * BEFORE autoload.txt processing, so HEN is always available.
+ */
+#include "hyperhen_elf.c"
 
 /* -----------------------------------------------------------------------
  * find_autoload_config
@@ -89,6 +102,33 @@ static int find_autoload_config(char *out_buf, size_t out_size) {
 
 
 /* -----------------------------------------------------------------------
+ * resolve_case_insensitive
+ *
+ * Tries to find `name` inside `dir` regardless of letter case (UFS is
+ * case-sensitive; the PS5 file system is not forgiving). Returns 0 and
+ * fills out_buf with full path "<dir><real name>" on match, -1 otherwise.
+ * ----------------------------------------------------------------------- */
+static int resolve_case_insensitive(const char *dir, const char *name, char *out_buf, size_t out_size) {
+    DIR *d = opendir(dir);
+    if (!d) {
+        return -1;
+    }
+
+    struct dirent *entry;
+    int found = -1;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcasecmp(entry->d_name, name) == 0) {
+            snprintf(out_buf, out_size, "%s%s", dir, entry->d_name);
+            found = 0;
+            break;
+        }
+    }
+
+    closedir(d);
+    return found;
+}
+
+/* -----------------------------------------------------------------------
  * run_autoload_sequence
  *
  * Opens config_path and processes each line:
@@ -125,8 +165,18 @@ static void run_autoload_sequence(const char *config_path) {
     int launched = 0;
     int errors = 0;
     int should_sync = 0;
+    int bom_checked = 0;
 
     while (fgets(line, sizeof(line), f)) {
+        /* Strip the UTF-8 BOM editors like Windows Notepad add at file start;
+           it silently breaks the stat() of the FIRST listed payload */
+        if (!bom_checked) {
+            bom_checked = 1;
+            if ((unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2] == 0xBF) {
+                memmove(line, line + 3, strlen(line + 3) + 1);
+            }
+        }
+
         /* Strip comments if any */
         char *comment = strchr(line, '#');
         if (comment) {
@@ -174,6 +224,17 @@ static void run_autoload_sequence(const char *config_path) {
             }
 
             struct stat st;
+            if (stat(full_path, &st) != 0) {
+                /* Case-insensitive fallback: UFS is case-sensitive but users often
+                   write "HyperHen.elf" on the USB / in autoload.txt mismatched */
+                char resolved[1024];
+                if (resolve_case_insensitive(config_dir, line, resolved, sizeof(resolved)) == 0) {
+                    printf("[autoloader] Case-insensitive match: %s -> %s\n", full_path, resolved);
+                    fflush(stdout);
+                    snprintf(full_path, sizeof(full_path), "%s", resolved);
+                }
+            }
+
             if (stat(full_path, &st) == 0) {
                 autoloader_notify("Launching: %s", line);
                 if (launch_elf_from_file(full_path) != 0) {
@@ -187,7 +248,8 @@ static void run_autoload_sequence(const char *config_path) {
             } else {
                 printf("[autoloader] Not found: %s\n", full_path);
                 fflush(stdout);
-                autoloader_notify("Not found: %s", line);
+                /* include the resolved path in the notification for easier debugging */
+                autoloader_notify("Not found: %s (%s)", line, full_path);
                 errors++;
             }
         }
@@ -225,6 +287,20 @@ int main(void) {
         printf("[autoloader] ERROR: elfldr did not become available. Aborting.\n");
         fflush(stdout);
         return -1;
+    }
+
+    /* Step 4b: launch the embedded HyperHEN immediately after the jailbreak,
+       BEFORE autoload.txt so that HEN-based payloads always have HEN ready */
+    printf("[autoloader] Launching embedded HyperHEN (%u bytes)...\n", hyperhen_elf_len);
+    fflush(stdout);
+    autoloader_notify("Launching HyperHEN...");
+    if (launch_elf_from_memory(hyperhen_elf, hyperhen_elf_len) == 0) {
+        usleep(1500000); /* 1.5 s - give the kernel payload time to settle */
+        autoloader_notify("HyperHEN loaded");
+    } else {
+        printf("[autoloader] WARNING: HyperHEN launch failed, continuing\n");
+        fflush(stdout);
+        autoloader_notify("HyperHEN launch failed (continuing)");
     }
 
     /* Step 5: locate autoload.txt */

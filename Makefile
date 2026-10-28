@@ -25,6 +25,8 @@ LDFLAGS  := -Wl,--gc-sections
 ELF          := autoloader.elf
 PLDMGR_ELF   := pldmgr.elf
 PLDMGR_ELF_C := pldmgr_elf.c
+HYPERHEN_ELF   := hyperhen.elf
+HYPERHEN_ELF_C := hyperhen_elf.c
 
 # -----------------------------------------------------------------------
 # Targets
@@ -38,9 +40,14 @@ $(PLDMGR_ELF_C): $(PLDMGR_ELF)
 	@echo "Embedding $(PLDMGR_ELF)..."
 	xxd -i $< > $@
 
-# Build autoloader.elf — pldmgr_elf.c is #include-d by src/main.c,
-# so it must NOT be passed again as a separate source file.
-$(ELF): $(PLDMGR_ELF_C) $(SRCS)
+# Embed hyperhen.elf the same way (auto-launched right after elfldr is ready)
+$(HYPERHEN_ELF_C): $(HYPERHEN_ELF)
+	@echo "Embedding $(HYPERHEN_ELF)..."
+	xxd -i $< > $@
+
+# Build autoloader.elf — pldmgr_elf.c / hyperhen_elf.c are #include-d by src/main.c,
+# so they must NOT be passed again as separate source files.
+$(ELF): $(PLDMGR_ELF_C) $(HYPERHEN_ELF_C) $(SRCS)
 	@echo "Building $(ELF)..."
 	$(CC) $(CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $(SRCS) $(LIBS)
 	@echo "Stripping $(ELF)..."
@@ -48,7 +55,7 @@ $(ELF): $(PLDMGR_ELF_C) $(SRCS)
 	@echo "Done: $(ELF)"
 
 clean:
-	rm -f $(ELF) $(PLDMGR_ELF_C)
+	rm -f $(ELF) $(PLDMGR_ELF_C) $(HYPERHEN_ELF_C)
 
 dist-clean: clean
 	rm -f $(PLDMGR_ELF)
