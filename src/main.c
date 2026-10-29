@@ -270,7 +270,8 @@ static void run_autoload_sequence(const char *config_path) {
             }
 
             if (stat(full_path, &st) == 0) {
-                autoloader_notify("Launching: %s", line);
+                printf("[autoloader] Launching: %s\n", line);
+                fflush(stdout);
                 if (launch_elf_from_file(full_path) != 0) {
                     autoloader_notify("Failed to launch: %s", line);
                     errors++;
@@ -296,9 +297,6 @@ static void run_autoload_sequence(const char *config_path) {
     fclose(f);
     printf("[autoloader] Autoload sequence complete. Launched %d payload(s).\n", launched);
     fflush(stdout);
-    if (launched > 0) {
-        autoloader_notify("Autoload complete (%d payload(s))", launched);
-    }
 
     if (should_sync && errors == 0) {
         try_sync_usb_to_data(config_path);
